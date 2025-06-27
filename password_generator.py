@@ -160,15 +160,15 @@ class PasswordGenerator:
         """
         self.policy = policy or PasswordPolicy()
         self.character_lake = CharacterLake(self.policy)
-        self.wordlist = self._load_wordlist() if PasswordGenerator.WORDLIST_FILE else None
+        self.wordlist = None # Load only when needed
     
     def _load_wordlist(self) -> List[str]:
         """Load wordlist for passphrase generation"""
         try:
             with open(PasswordGenerator.WORDLIST_FILE, 'r', encoding='utf-8') as f:
                 return [line.strip() for line in f if line.strip()]
-        except IOError:
-            raise PasswordGeneratorError("Failed to load wordlist for passphrase generation")
+        except IOError as e:
+            raise PasswordGeneratorError(f"Failed to load wordlist for passphrase generation: {str(e)}")
     
     def generate_password(self, length: int, category: PasswordCategory, 
                          strength: PasswordStrength = PasswordStrength.STRONG) -> str:
@@ -226,6 +226,9 @@ class PasswordGenerator:
         Returns:
             Generated passphrase string
         """
+        if self.wordlist is None:
+            self.wordlist = self._load_wordlist()
+            
         if not self.wordlist:
             raise PasswordGeneratorError("Passphrase generation requires a wordlist")
         
