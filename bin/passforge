@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+#
+# bin/passforge - Bash convenience wrapper around the Python passforge CLI.
+#
+# Adds a couple of operator-friendly commands on top of run.sh:
+#   passforge gen  --length 16 --category complex --strength strong
+#   passforge tail-log [N]        # tail the last N audit log lines (default 20)
+#   passforge batch <specs.csv>   # run one generation per CSV row
+#
+# Any subcommand not recognized below (or no subcommand at all) is passed
+# straight through to run.sh, so all normal passforge flags keep working:
+#   passforge --length 16 --category complex
+#
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+RUN_SH="${PROJECT_ROOT}/run.sh"
+LOG_DIR="${PROJECT_ROOT}/logs"
+AUDIT_LOG="${LOG_DIR}/passforge_audit.jsonl"
+
+die() { printf 'passforge: %s\n' "$1" >&2; exit 1; }
+
+cmd_tail_log() {
+    local n="${1:-20}"
+    [[ -f "$AUDIT_LOG" ]] || die "No audit log yet at ${AUDIT_LOG}"
+    if command -v jq >/dev/null 2>&1; then
+        tail -n "$n" "$AUDIT_LOG" | jq -c '{timestamp, level, message, event_type}'
+    else
+        tail -n "$n" "$AUDIT_LOG"
+    fi
+}
+
+# batch mode: CSV columns -> length,category,strength,count,output
+cmd_batch() {
+    local specs_file="${1:-}"
+    [[ -n "$specs_file" ]] || die "Usage: passforge batch <specs.csv>"
+    [[ -f "$specs_file" ]] || die "Specs file not found: $specs_file"
+
+    local line_no=0
+    while IFS=',' read -r length category strength count output; do
+        line_no=$((line_no + 1))
+        [[ "$line_no" -eq 1 && "$length" == "length" ]] && continue  # skip header
+        [[ -z "${length// }" ]] && continue                          # skip blank lines
+
+        length="$(echo "$length" | xargs)"
+        category="$(echo "$category" | xargs)"
+        strength="$(echo "${strength:-strong}" | xargs)"
+        count="$(echo "${count:-1}" | xargs)"
+        output="$(echo "${output:-}" | xargs)"
+
+        log_prefix="[batch row ${line_no}]"
+        echo "${log_prefix} length=${length} category=${category} strength=${strength} count=${count}"
+
+        args=(--length "$length" --category "$category" --strength "$strength" --count "$count")
+        [[ -n "$output" ]] && args+=(--output "$output")
+
+        if ! "$RUN_SH" "${args[@]}"; then
+            echo "${log_prefix} FAILED" >&2
+        fi
+    done < "$specs_file"
+}
+
+main() {
+    if [[ $# -eq 0 ]]; then
+        exec "$RUN_SH"
+    fi
+
+    case "$1" in
+        gen)
+            shift
+            exec "$RUN_SH" "$@"
+            ;;
+        tail-log)
+            shift
+            cmd_tail_log "$@"
+            ;;
+        batch)
+            shift
+            cmd_batch "$@"
+            ;;
+        -h|--help)
+            cat <<EOF
+Usage: passforge [gen] [passforge-flags...]
+       passforge tail-log [N]
+       passforge batch <specs.csv>
+
+Any unrecognized first argument is forwarded directly to run.sh, so
+standard flags like --length, --category, --strength also work with
+no subcommand at all.
+EOF
+            ;;
+        *)
+            exec "$RUN_SH" "$@"
+            ;;
+    esac
+}
+
+main "$@"
